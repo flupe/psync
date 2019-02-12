@@ -15,6 +15,7 @@ object InlineOps {
 
     def ==>(rhs: Formula) = Implies(lhs, rhs)
     def ===(rhs: Formula) = Eq(lhs, rhs)
+    def ≡(rhs: Formula)   = Eq(lhs, rhs)
     def !==(rhs: Formula) = Neq(lhs, rhs)
     def ≠(rhs: Formula)   = Neq(lhs, rhs)
 
@@ -22,7 +23,7 @@ object InlineOps {
     def -(rhs: Formula) = Minus(lhs, rhs)
     def *(rhs: Formula) = Times(lhs, rhs)
     def /(rhs: Formula) = Divides(lhs, rhs)
-    
+
     def <=(rhs: Formula) = Leq(lhs, rhs)
     def >=(rhs: Formula) = Geq(lhs, rhs)
     def ≤(rhs: Formula) = Leq(lhs, rhs)
