@@ -42,6 +42,7 @@ class MultiPraxosRoles extends FunSuite {
   // val send = UnInterpretedFct("send", Some(pid ~> Product(payloadType, FSet(pid))))
   // (i.e we can only send one msg at each roung -- to many processes)
 
+  // TODO: describe each axiom
   val axioms = And(
     // π is the set of all processes
     ForAll(List (p), (p ∈ π)),
@@ -49,60 +50,74 @@ class MultiPraxosRoles extends FunSuite {
     // all processes in ho are in the keyset of the mbox
     // and the converse is true (keyset of send)
     ForAll(List (p, q),
-      (q ∈ ho(p)) ==> ((q ∈ KeySet(mbox(p))) ∧ (p ∈ KeySet(send(q))))),
+      ((q ∈ ho(p) ∧ (p ∈ KeySet(send(q)))) ==> (q ∈ KeySet(mbox(p))))),
 
     ForAll(List (p, q),
-      (q ∈ ho(p)) ==> (IsDefinedAt(mbox(p), q) ∧ IsDefinedAt(send(q), p))),
+      (q ∈ KeySet(mbox(p))) ==> ((q ∈ ho(p) ∧ (p ∈ KeySet(send(q)))))),
+
+    ForAll(List (p, q),
+      (q ∈ ho(p) ∧ (p ∈ KeySet(send(q)))) ==> (IsDefinedAt(mbox(p), q) ∧ IsDefinedAt(send(q), p))),
+
+    ForAll(List (p, q),
+      (q ∉ ho(p)) ==> (Not(IsDefinedAt(mbox(p), q)))),
+
+    ForAll(List (p, q),
+      (Not(IsDefinedAt(mbox(p), q))) ==> (q ∉ ho(p))),
+
+    ForAll(List (p, q),
+      (p ∉ KeySet(send(q))) ==> (Not(q ∈ KeySet(mbox(p))))),
 
     // process p receives from q what q sent to p
-    ForAll(List (p, q), (q ∈ ho(p)) ==> (LookUp(mbox(p), q) ≡ LookUp(send(q), p))),
+    ForAll(List (p, q), ((q ∈ ho(p) ) ∧ (p ∈ KeySet(send(q)))) ==> (mbox(p).lookUp(q) ≡ send(q).lookUp(p))),
+
+    ForAll(List(p), SubsetEq(KeySet(mbox(p)), ho(p))),
   )
 
   // invariant pre-broadcast
   val inv0 = And(
     leader ∈ act,
-    // ForAll(List(p), lastIndex(p) ≡ lastIndex(leader))
+    ForAll(List(p), lastIndex(p) ≡ lastIndex(leader))
   )
 
 
   // =================================================================================
+
   // Inner algorithm, round 1
   val round1 = And(
+    // active processes after round1 were active prior to round1
     act1 ⊆ act,
 
-    // SEND ========================
+    // SEND ==========================================================================
 
     // non-leaders do not send anything
-    ForAll(List (p), (p ≠ leader) ==> (Size(send(p)) ≡ 0)),
+    ForAll(List(p), (p ≠ leader) ==> (Size(send(p)) ≡ 0)),
 
-    // leader sends current cmd
+    // leader sends current command to all processes
     ForAll(List(q), send(leader).lookUp(q) ≡ log(leader).lookUp(lastIndex(leader))._1),
 
 
-    // UPDATE ======================
+    // UPDATE ========================================================================
 
     // leader stays active and conserves values
-    (leader ∈ act1),
-    (log1(leader) ≡ log(leader)),
+    leader ∈ act1,
+    log1(leader) ≡ log(leader),
 
-    // all nodes keep same lastIndex
+    // all nodes keep the same lastIndex
     ForAll(List(p), lastIndex1(p) ≡ lastIndex(p)),
 
-    // if active non leader process receives msg
+    // if active process receives msg from leader,
     // update log and stay active
     ForAll(List (p),
       ((p ∈ act) ∧ (Size(mbox(p)) > 0)) ==>
-          ((log1(p) ≡
-              log(p).updated(lastIndex(p), Tuple((log(leader).lookUp(lastIndex(leader)))._1, False())))
-        ∧ (p ∈ act1))
+        ((log1(p) ≡ log(p).updated(lastIndex(p), Tuple(mbox(p).lookUp(leader), False())))
+        // if we use instead the more direct assertion below, the latter test works fine
+        //((log1(p) ≡ log(p).updated(lastIndex(p), Tuple(send(leader).lookUp(p), False())))
+         ∧ (p ∈ act1)) 
     ),
 
     // otherwise, becomes inactive, and conserves values
     ForAll(List (p), (p ∉ act) ==> ((p ∉ act1) ∧ (log1(p) ≡ log(p)))),
-
-    ForAll(List (p), ((p ∈ act) ∧ (Size(mbox(p)) ≡ 0)) ==>
-        ((p ∉ act1) ∧ (log1(p) ≡ log(p)))),
-
+    ForAll(List (p), ((p ∈ act) ∧ (Size(mbox(p)) ≡ 0)) ==> ((p ∉ act1) ∧ (log1(p) ≡ log(p)))),
   )
 
   /* Invariant Post-Round1
@@ -120,15 +135,18 @@ class MultiPraxosRoles extends FunSuite {
     )
   )
 
-  ignore("inv0 ∧ round1 ⇒ inv1") {
+  test("inv0 ∧ round1 ⇒ inv1") {
     val fs = List(
       axioms,
+      inv0,
       round1,
       Not(inv1)
     )
 
-    assertUnsat(fs, to=60000, reducer=c2e1)
-    // getModel(fs, reducer=c2e1)
+    val reducer = c3e1
+    assertUnsat(fs, debug=false, to=60000, reducer=reducer)
+    // val f0 = reduce(c2e1, fs, true, true)
+    // getModel(fs, to=60000, reducer=reducer)
   }
 
   // =================================================================================
