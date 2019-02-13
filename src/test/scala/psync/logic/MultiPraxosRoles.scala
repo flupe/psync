@@ -13,69 +13,70 @@ class MultiPraxosRoles extends FunSuite {
 
   // during broadcast, one leader known to all
   val leader = Variable("leader").setType(pid)
-  val π = Variable("pi").setType(FSet(pid)) // set of all processes
 
   // set of active processes
   val act = Variable("act").setType(FSet(pid))
   val act1 = Variable("act1").setType(FSet(pid))
 
   // log-related types & uninterpreted functions
-  val commandType = UnInterpreted("command")
+  val commandType   = UnInterpreted("command")
   val committedType = Bool
-  val logEntryType = Product(commandType, committedType)
-  val key = Int
+  val logEntryType  = Product(commandType, committedType)
+  val keyType       = Int
+  val log        = UnInterpretedFct("log", Some(pid ~> FMap(keyType, logEntryType)))
+  val log1       = UnInterpretedFct("log1", Some(pid ~> FMap(keyType, logEntryType)))
+  val lastIndex  = UnInterpretedFct("lastIndex", Some(pid ~> keyType))
+  val lastIndex1 = UnInterpretedFct("lastIndex1", Some(pid ~> keyType))
 
-  val i = Variable("i").setType(key)
-
-  val log        = UnInterpretedFct("log", Some(pid ~> FMap(key, logEntryType)))
-  val log1       = UnInterpretedFct("log1", Some(pid ~> FMap(key, logEntryType)))
-  val lastIndex  = UnInterpretedFct("lastIndex", Some(pid ~> key))
-  val lastIndex1 = UnInterpretedFct("lastIndex1", Some(pid ~> key))
-
-  val payloadType   = UnInterpreted("payload")
+  val i = Variable("i").setType(keyType)
 
   val send = UnInterpretedFct("send", Some(pid ~> FMap(pid, commandType)))
   val mbox = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, commandType)))
 
-  // right now the type of send is too permissive
-  // perhaps we could consider the following type
-  // val send = UnInterpretedFct("send", Some(pid ~> Product(payloadType, FSet(pid))))
-  // (i.e we can only send one msg at each roung -- to many processes)
+  /* NOTE:
+   *   right now the type of send is too permissive
+   *   perhaps we could consider the following type
+   *   val send = UnInterpretedFct("send", Some(pid ~> Product(payloadType, FSet(pid))))
+   *   (i.e we can only send one msg at each round -- to many processes)
+   */
 
-  // TODO: describe each axiom
+
   val axioms = And(
-    // π is the set of all processes
-    ForAll(List (p), (p ∈ π)),
-
-    // all processes in ho are in the keyset of the mbox
-    // and the converse is true (keyset of send)
+    // all processes in ho(p) that sent something to p are in the mbox of p
     ForAll(List (p, q),
       ((q ∈ ho(p) ∧ (p ∈ KeySet(send(q)))) ==> (q ∈ KeySet(mbox(p))))),
 
+    // if a process q sent a msg to p but is not in its mbox, p did not heard of q
+    ForAll(List (p, q),
+      ((q ∉ KeySet(mbox(p))) ∧ (p ∈ KeySet(send(q)))) ==> (q ∉ ho(p))),
+
+    // if a process q is in the mbox of p, it sent something to p AND it has been heard of
     ForAll(List (p, q),
       (q ∈ KeySet(mbox(p))) ==> ((q ∈ ho(p) ∧ (p ∈ KeySet(send(q)))))),
 
+    // if a process did not send to p, it cannot be in its mbox
     ForAll(List (p, q),
-      (q ∈ ho(p) ∧ (p ∈ KeySet(send(q)))) ==> (IsDefinedAt(mbox(p), q) ∧ IsDefinedAt(send(q), p))),
+      (p ∉ KeySet(send(q))) ==> (q ∉ KeySet(mbox(p)))),
 
+    // if a process hasn't be heard of, it cannot be in the mbox
     ForAll(List (p, q),
-      (q ∉ ho(p)) ==> (Not(IsDefinedAt(mbox(p), q)))),
+      (q ∉ ho(p)) ==> (q ∉ KeySet(mbox(p)))),
 
+    // process p receives from q what q sent to p, if q has been heard of
     ForAll(List (p, q),
-      (Not(IsDefinedAt(mbox(p), q))) ==> (q ∉ ho(p))),
+      ((q ∈ ho(p)) ∧ (p ∈ KeySet(send(q)))) ==> (mbox(p).lookUp(q) ≡ send(q).lookUp(p))),
 
-    ForAll(List (p, q),
-      (p ∉ KeySet(send(q))) ==> (Not(q ∈ KeySet(mbox(p))))),
-
-    // process p receives from q what q sent to p
-    ForAll(List (p, q), ((q ∈ ho(p) ) ∧ (p ∈ KeySet(send(q)))) ==> (mbox(p).lookUp(q) ≡ send(q).lookUp(p))),
-
-    ForAll(List(p), SubsetEq(KeySet(mbox(p)), ho(p))),
+    // p receives messages only from processes it has heard of
+    ForAll(List(p), (KeySet(mbox(p)) ⊆ ho(p))),
   )
+
 
   // invariant pre-broadcast
   val inv0 = And(
+    // leader is active
     leader ∈ act,
+
+    // all processes share same lastIndex
     ForAll(List(p), lastIndex(p) ≡ lastIndex(leader))
   )
 
@@ -120,10 +121,11 @@ class MultiPraxosRoles extends FunSuite {
     ForAll(List (p), ((p ∈ act) ∧ (Size(mbox(p)) ≡ 0)) ==> ((p ∉ act1) ∧ (log1(p) ≡ log(p)))),
   )
 
+
   /* Invariant Post-Round1
    * - leader is active
    * - if node is active, it has the same active command as the leader, uncommitted
-   * - the previous log is left untouched
+   * TODO: there is a lot more stuff we have to check
    */
   val inv1 = And(
     // leader active
@@ -135,7 +137,8 @@ class MultiPraxosRoles extends FunSuite {
     )
   )
 
-  test("inv0 ∧ round1 ⇒ inv1") {
+
+  ignore("inv0 ∧ round1 ⇒ inv1") {
     val fs = List(
       axioms,
       inv0,
@@ -143,11 +146,12 @@ class MultiPraxosRoles extends FunSuite {
       Not(inv1)
     )
 
-    val reducer = c3e1
-    assertUnsat(fs, debug=false, to=60000, reducer=reducer)
+    val reducer = c2e1
+    assertUnsat(fs, debug=false, to=600000, reducer=reducer)
     // val f0 = reduce(c2e1, fs, true, true)
     // getModel(fs, to=60000, reducer=reducer)
   }
+
 
   // =================================================================================
   // Inner algorithm, round 2
