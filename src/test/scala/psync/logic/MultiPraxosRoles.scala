@@ -19,9 +19,9 @@ class MultiPraxosRoles extends FunSuite {
   val act1 = Variable("act1").setType(FSet(pid))
 
   // log-related types & uninterpreted functions
-  val commandType   = UnInterpreted("command")
-  val committedType = Bool
-  val logEntryType  = Product(commandType, committedType)
+  val cmdType   = UnInterpreted("command")
+  val cmtType = Bool
+  val logEntryType  = Product(cmdType, cmtType)
   val keyType       = Int
   val log        = UnInterpretedFct("log", Some(pid ~> FMap(keyType, logEntryType)))
   val log1       = UnInterpretedFct("log1", Some(pid ~> FMap(keyType, logEntryType)))
@@ -31,8 +31,24 @@ class MultiPraxosRoles extends FunSuite {
   val i = Variable("i").setType(keyType)
   val j = Variable("j").setType(keyType)
 
-  val send = UnInterpretedFct("send", Some(pid ~> FMap(pid, commandType)))
-  val mbox = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, commandType)))
+  val send = UnInterpretedFct("send", Some(pid ~> FMap(pid, cmdType)))
+  val mbox = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, cmdType)))
+
+
+  def prime(f: Formula) : Formula = {
+    val symMap = Map[Symbol, Symbol](
+      log       -> log1,
+      lastIndex -> lastIndex1,
+    )
+
+    val varMap = Map[Variable, Variable](
+      act       -> act1,
+    )
+
+    val f1 = FormulaUtils.mapSymbol(x => symMap.getOrElse(x, x), f)
+    FormulaUtils.alpha(varMap, f1)
+  }
+
 
   /* NOTE:
    *   right now the type of send is too permissive
@@ -128,31 +144,28 @@ class MultiPraxosRoles extends FunSuite {
    */
   val inv1 = And(
     // leader active
-    leader ∈ act1,
+    leader ∈ act,
 
     // all active processes have same command
     ForAll(List(p),
-      (p ∈ act1) ==> (log1(p).lookUp(lastIndex1(p))._1 ≡ log(leader).lookUp(lastIndex(leader))._1)
+      (p ∈ act) ==> (log(p).lookUp(lastIndex(p))._1 ≡ log(leader).lookUp(lastIndex(leader))._1)
     ),
 
     // all processes have the same values in the log (before lastIndex(i))
     ForAll(List(p, i),
-      (i < lastIndex1(leader)) ==> (log1(p).lookUp(i) ≡ log1(leader).lookUp(i))),
+      (i < lastIndex(leader)) ==> (log(p).lookUp(i) ≡ log(leader).lookUp(i))),
   )
 
 
-  ignore("inv0 ∧ round1 ⇒ inv1") {
+  test("inv0 ∧ round1 ⇒ inv1") {
     val fs = List(
       axioms,
       inv0,
       round1,
-      Not(inv1)
+      Not(prime(inv1))
     )
 
-    val reducer = c1e1
-    assertUnsat(fs, debug=false, to=60000, reducer=reducer)
-    // val f0 = reduce(c2e1, fs, true, true)
-    // getModel(fs, to=60000, reducer=reducer)
+    assertUnsat(fs, debug=false, to=60000, reducer=c1e1)
   }
 
 
