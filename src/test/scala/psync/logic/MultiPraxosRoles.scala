@@ -8,6 +8,7 @@ import org.scalatest._
 
 class MultiPraxosRoles extends FunSuite {
 
+  // Housekeeping {{{
   val p = Variable("p").setType(pid)
   val q = Variable("q").setType(pid)
 
@@ -52,9 +53,8 @@ class MultiPraxosRoles extends FunSuite {
    *   val send = UnInterpretedFct("send", Some(pid ~> Product(payloadType, FSet(pid))))
    *   (i.e we can only send one msg at each round -- to many processes)
    */
-
-
-  // TODO(flupe): add cardinality constraints
+  // }}}
+  // Axioms {{{
 
   def axioms(send: UnInterpretedFct, mbox: UnInterpretedFct) = And(
     ForAll(List(p), p ∈ pi),
@@ -63,16 +63,18 @@ class MultiPraxosRoles extends FunSuite {
 
     ForAll(List (p), KeySet(mbox(p)) ⊆ pi),
     ForAll(List (p), KeySet(send(p)) ⊆ pi),
+    act ⊆ pi,
     ForAll(List (p), ho(p) ⊆ pi),
+
+    // only active processes can send messages
+    ForAll(List (p), KeySet(mbox(p)) ⊆ act),
 
     ForAll(List(p), KeySet(mbox(p)).card <= n),
     ForAll(List(p), KeySet(mbox(p)).card >= 0),
+    act.card <= n,
 
     ForAll(List(p), (ho(p)).card <= n),
     ForAll(List(p), (ho(p)).card >= 0),
-
-    // non-leaders do not send anything
-    ForAll(List(p), (p ≠ leader) ==> (KeySet(send(p)).card === 0)),
 
     // q in mbox(p) <=> q sent msg to p and p heard of q
     ForAll(List (p, q),
@@ -94,10 +96,11 @@ class MultiPraxosRoles extends FunSuite {
     //   (KeySet(mbox(p)) ⊆ Comprehension(List(q), p ∈ KeySet(send(q))))),
   )
 
-
-  // invariant pre-broadcast
+  // }}}
+  // Initial invariant {{{
+  //
   val inv0 = And(
-    // leader is active
+    // everyone is active (for now)
     ForAll(List(p), p ∈ act),
 
     // all processes share same lastIndex
@@ -106,17 +109,16 @@ class MultiPraxosRoles extends FunSuite {
     // each process has entries up to lastIndex(p),
     // and they are equal to entries in log(leader)
     ForAll(List(p, i),
-      (i < lastIndex(p)) ==>
+      ((IntLit(0) <= i) ∧ (i < lastIndex(p))) ==>
         ((i ∈ KeySet(log(p))) ∧ (log(p).lookUp(i) ≡ log(leader).lookUp(i)))),
   )
 
+  // }}}
+  // Round 1 {{{
 
   val send1 = UnInterpretedFct("send", Some(pid ~> FMap(pid, cmdType)))
   val mbox1 = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, cmdType)))
 
-  // =================================================================================
-
-  // Inner algorithm, round 1
   val round1 = And(
     // active processes after round1 were active prior to round1
     act1 ⊆ act,
@@ -127,7 +129,7 @@ class MultiPraxosRoles extends FunSuite {
     ForAll(List(p), (p ≠ leader) ==> (Size(send1(p)) ≡ 0)),
 
     // leader sends current command to all processes
-    ForAll(List(q), send1(leader).lookUp(q) ≡ log(leader).lookUp(lastIndex(leader))._1),
+    ForAll(List(q), (q ∈ KeySet(send1(leader))) ∧ (send1(leader).lookUp(q) ≡ log(leader).lookUp(lastIndex(leader))._1)),
 
 
     // UPDATE ========================================================================
@@ -172,11 +174,9 @@ class MultiPraxosRoles extends FunSuite {
 
     // all processes have the same values in the log (before lastIndex(i))
     ForAll(List(p, i),
-      (i < lastIndex(leader)) ==> ((i ∈ KeySet(log(p))) ∧ (log(p).lookUp(i) ≡ log(leader).lookUp(i)))),
+      ((IntLit(0) <= i) ∧ (i < lastIndex(leader))) ==> ((i ∈ KeySet(log(p))) ∧ (log(p).lookUp(i) ≡ log(leader).lookUp(i)))),
   )
 
-
-  // ~ 29 seconds
   test("inv0 ∧ round1 ⇒ inv1") {
     val fs = List(
       axioms(send1, mbox1),
@@ -185,12 +185,12 @@ class MultiPraxosRoles extends FunSuite {
       Not(prime(inv1))
     )
 
-    assertUnsat(fs, debug=false, to=60000, reducer=c1e1)
+    assertUnsat(fs, debug=false, to=60000, onlyAxioms=true, reducer=c1e1)
   }
 
+  // }}}
+  // Round 2 {{{
 
-  // =================================================================================
-  // Inner algorithm, round 2
   val send2 = UnInterpretedFct("send", Some(pid ~> FMap(pid, Int)))
   val mbox2 = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, Int)))
 
@@ -203,7 +203,8 @@ class MultiPraxosRoles extends FunSuite {
     Size(send2(leader)) ≡ 0,
 
     // non-leaders send receipt to leader
-    ForAll(List(p), ((p ∈ act) ∧ (p ≠ leader)) ==> send2(p).lookUp(leader) ≡ IntLit(1)),
+    ForAll(List(p), ((p ∈ act) ∧ (p ≠ leader)) ==>
+        ((leader ∈ KeySet(send2(p))) ∧ (send2(p).lookUp(leader) ≡ IntLit(1)))),
 
     // non-active nodes do nothing
     ForAll(List(p), (p ∉ act) ==> Size(send2(p)) ≡ 0),
@@ -242,16 +243,22 @@ class MultiPraxosRoles extends FunSuite {
   val inv2 = And(
     (leader ∈ act) ==> (log(leader).lookUp(lastIndex(leader))._2 ≡ True()),
 
-    (leader ∈ act) ==> (act.card >= n / 2),
+    // TODO(flupe): for the life of me it cannot figure this out
+    // (leader ∈ act) ==> (act.card >= n / 2)
 
     // all processes share same lastIndex
     ForAll(List(p), lastIndex(p) ≡ lastIndex(leader)),
 
-    // ForAll(List(p, i),
-    //   (i < lastIndex(leader)) ==> (log(p).lookUp(i) ≡ log(leader).lookUp(i))),
+    // active processes have same command as leader
+    ForAll (List(p), p ∈ act ==>
+        (log(p).lookUp(lastIndex(p))._1 ≡ log(leader).lookUp(lastIndex(leader))._1)
+    ),
+
+    ForAll(List(p, i),
+      ((IntLit(0) <= i) ∧ (i < lastIndex(leader))) ==> (log(p).lookUp(i) ≡ log(leader).lookUp(i))),
   )
 
-  ignore("inv1 ∧ round2 ⇒ inv2") {
+  test("inv1 ∧ round2 ⇒ inv2") {
     val fs = List(
       axioms(send2, mbox2),
       inv1,
@@ -259,18 +266,15 @@ class MultiPraxosRoles extends FunSuite {
       Not(prime(inv2))
     )
 
-    println(fs)
-
     val reducer = c2e1
-    assertUnsat(fs, debug=false, to=60000, reducer=reducer)
+    assertUnsat(fs, debug=false, onlyAxioms=true, to=20000, reducer=reducer)
     // val f0 = reduce(c2e1, fs, true, true)
     // getModel(fs, to=60000, reducer=reducer)
   }
 
+  // }}}
+  // Round 3 {{{
 
-  // =================================================================================
-
-  // Inner algorithm, round 3
   val send3 = UnInterpretedFct("send", Some(pid ~> FMap(pid, Int)))
   val mbox3 = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, Int)))
 
@@ -280,7 +284,7 @@ class MultiPraxosRoles extends FunSuite {
     // SEND ==========================================================================
 
     // non-leaders do not send anything
-    ForAll(List(p), (p ≠ leader) ==> (send3(p).size ≡ 0)),
+    ForAll(List(p), (p ≠ leader) ==> (Size(send3(p)) ≡ 0)),
 
     // if leader active, leader sends msg to everyone
     (leader ∈ act) ==> ForAll(List(p), send3(leader).lookUp(p) ≡ IntLit(1)),
@@ -300,22 +304,22 @@ class MultiPraxosRoles extends FunSuite {
       p ∉ act1,
       log1(p) ≡ log(p),
       lastIndex1(p) ≡ lastIndex(p),
-    ))),
+    )),
 
     // if active process receives msg from leader:
     // - commit last cmd
     // - stay active
     // - keep same index
     ForAll(List (p),
-      ((p ≠ leader) ∧ (p ∈ act) ∧ Not(Size(mbox1(p)) ≡ 0)) ==> And(
-        log1(p) ≡ log(p).updated(lastIndex(p), Tuple(log(p).lookUp(lastIndex(p)), True())),
+      ((p ≠ leader) ∧ (p ∈ act) ∧ Not(Size(mbox3(p)) ≡ 0)) ==> And(
+        log1(p) ≡ log(p).updated(lastIndex(p), Tuple(log(p).lookUp(lastIndex(p))._1, True())),
         p ∈ act1,
         lastIndex1(p) ≡ lastIndex(p),
     )),
 
     // otherwise, becomes inactive, and conserves values
     ForAll(List (p),
-      ((p ≠ leader) ∧ (p ∈ act) ∧ (Size(mbox1(p)) ≡ 0)) ==> And(
+      ((p ≠ leader) ∧ (p ∈ act) ∧ (Size(mbox3(p)) ≡ 0)) ==> And(
         log1(p) ≡ log(p),
         lastIndex1(p) ≡ lastIndex(p),
         p ∉ act1,
@@ -324,6 +328,30 @@ class MultiPraxosRoles extends FunSuite {
 
   /* Invariant Post-Round3
    */
-  val inv3 = And()
+  val inv3 = And(
+    // every active process has committed the command
+    (leader ∈ act) ==> ForAll(List(p), (p ∈ act) ==> And(
+        log(p).lookUp(lastIndex(p))._1 ≡ log(leader).lookUp(lastIndex(leader))._1,
+        log(p).lookUp(lastIndex(p))._2 ≡ True()
+    )),
+
+    ForAll(List(p), lastIndex(p) ≡ lastIndex(leader))
+  )
+
+  ignore("inv2 ∧ round3 ⇒ inv3") {
+    val fs = List(
+      axioms(send3, mbox3),
+      inv2,
+      round3,
+      Not(prime(inv3))
+    )
+
+    val reducer = c1e1
+    assertUnsat(fs, debug=false, to=60000, reducer=reducer)
+    // val f0 = reduce(c2e1, fs, true, true)
+    // getModel(fs, to=60000, reducer=reducer)
+  }
+
+  // }}}
 
 }
