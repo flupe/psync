@@ -240,11 +240,12 @@ class MultiPraxosRoles extends FunSuite {
    * - if leader is active, a majority of nodes have the same active command as the leader,
    * - other nodes have the same prefix-log (?)
    */
-  val inv2 = And(
-    (leader ∈ act) ==> (log(leader).lookUp(lastIndex(leader))._2 ≡ True()),
+  val inv2_maj = And(
+    (leader ∈ act) ==> (act.card > n / 2),
+  )
 
-    // TODO(flupe): for the life of me it cannot figure this out
-    // (leader ∈ act) ==> (act.card >= n / 2)
+  val inv2_misc = And(
+    (leader ∈ act) ==> (log(leader).lookUp(lastIndex(leader))._2 ≡ True()),
 
     // all processes share same lastIndex
     ForAll(List(p), lastIndex(p) ≡ lastIndex(leader)),
@@ -258,18 +259,24 @@ class MultiPraxosRoles extends FunSuite {
       ((IntLit(0) <= i) ∧ (i < lastIndex(leader))) ==> (log(p).lookUp(i) ≡ log(leader).lookUp(i))),
   )
 
+  val inv2 = And(inv2_maj, inv2_misc)
+
   test("inv1 ∧ round2 ⇒ inv2") {
-    val fs = List(
+    val fs_maj = List(
       axioms(send2, mbox2),
       inv1,
       round2,
-      Not(prime(inv2))
+      Not(prime(inv2_maj))
     )
 
-    val reducer = c2e1
-    assertUnsat(fs, debug=false, onlyAxioms=true, to=20000, reducer=reducer)
-    // val f0 = reduce(c2e1, fs, true, true)
-    // getModel(fs, to=60000, reducer=reducer)
+    val fs_misc = List(
+      inv1,
+      round2,
+      Not(prime(inv2_misc))
+    )
+
+    assertUnsat(fs_misc, debug=false, onlyAxioms=true, to=10000, reducer=c1e1)
+    assertUnsat(fs_maj, debug=false, onlyAxioms=false, to=60000, reducer=c2e1)
   }
 
   // }}}
