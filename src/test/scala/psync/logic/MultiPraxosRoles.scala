@@ -20,6 +20,7 @@ class MultiPraxosRoles extends FunSuite {
   val act1 = Variable("act1").setType(FSet(pid))
   val pi = Variable("pi").setType(FSet(pid))
 
+
   // log-related types & uninterpreted functions
   val cmdType   = UnInterpreted("command")
   val logEntryType  = Product(cmdType, Bool)
@@ -77,11 +78,11 @@ class MultiPraxosRoles extends FunSuite {
     ForAll(List(p), (ho(p)).card >= 0),
 
     // q in mbox(p) <=> q sent msg to p and p heard of q
-    ForAll(List (p, q),
+    ForAll(List(p, q),
       (q ∈ KeySet(mbox(p))) ≡ ((q ∈ ho(p) ∧ (p ∈ KeySet(send(q)))))),
 
     // process p receives from q what q sent to p, if q has been heard of
-    ForAll(List (p, q),
+    ForAll(List(p, q),
       ((q ∈ ho(p)) ∧ (p ∈ KeySet(send(q)))) ==> (mbox(p).lookUp(q) ≡ send(q).lookUp(p))),
 
     // if a process p sends nothing, then it is received by no one.
@@ -90,6 +91,9 @@ class MultiPraxosRoles extends FunSuite {
 
     // p receives messages only from processes it has heard of
     ForAll(List(p), (KeySet(mbox(p)) ⊆ ho(p))),
+
+    ForAll(List(p, q),
+      (q ∈ KeySet(mbox(p))) ≡ ((q ∈ ho(p) ∧ (p ∈ KeySet(send(q)))))),
 
     // p receives messages only from processes that have sent something to p
     // ForAll(List(p),
@@ -246,6 +250,10 @@ class MultiPraxosRoles extends FunSuite {
    */
   val inv2_maj = And(
     (leader ∈ act) ==> (act.card > n / 2),
+
+    (leader ∈ act) ==> (Cardinality(Comprehension(List(p),
+      log(p).lookUp(lastIndex(p))._1 ≡ log(leader).lookUp(lastIndex(leader))._1,
+    )) > n / 2)
   )
 
   val inv2_misc = And(
@@ -259,11 +267,12 @@ class MultiPraxosRoles extends FunSuite {
         (log(p).lookUp(lastIndex(p))._1 ≡ log(leader).lookUp(lastIndex(leader))._1)
     ),
 
-    ForAll(List(p, i),
-      ((IntLit(0) <= i) ∧ (i < lastIndex(p))) ==> ((i ∈ KeySet(log(p))) ∧ (log(p).lookUp(i) ≡ log(leader).lookUp(i)))),
   )
 
-  val inv2 = And(inv2_maj, inv2_misc)
+  val inv2_c = ForAll(List(p, i),
+    ((IntLit(0) <= i) ∧ (i < lastIndex(p))) ==> ((i ∈ KeySet(log(p))) ∧ (log(p).lookUp(i) ≡ log(leader).lookUp(i))))
+
+  val inv2 = And(inv2_maj, inv2_misc, inv2_c)
 
   test("inv1 ∧ round2 ⇒ inv2") {
     val fs_maj = List(
@@ -276,10 +285,10 @@ class MultiPraxosRoles extends FunSuite {
     val fs_misc = List(
       inv1,
       round2,
-      Not(prime(inv2_misc))
+      Not(prime(And(inv2_misc, inv2_c)))
     )
 
-    assertUnsat(fs_misc, debug=false, onlyAxioms=true, to=10000, reducer=c1e1)
+    // assertUnsat(fs_misc, debug=false, onlyAxioms=true, to=10000, reducer=c1e1)
     assertUnsat(fs_maj, debug=false, onlyAxioms=false, to=60000, reducer=c2e1)
   }
 
@@ -310,6 +319,10 @@ class MultiPraxosRoles extends FunSuite {
 
     // all nodes keep the same lastIndex
     ForAll(List(p), lastIndex1(p) ≡ lastIndex(p)),
+
+    // XXX(flupe): this is a bit of a hack, whilst true
+    //             perhaps tuple update should be better axiomatized?
+    ForAll(List(p), log1(p).lookUp(lastIndex1(p))._1 ≡ log(p).lookUp(lastIndex(p))._1),
 
     // if active process receives msg from leader:
     // - commit last cmd
@@ -343,7 +356,6 @@ class MultiPraxosRoles extends FunSuite {
       ((IntLit(0) <= i) ∧ (i < lastIndex(p))) ==> ((i ∈ KeySet(log(p))) ∧ (log(p).lookUp(i) ≡ log(leader).lookUp(i)))),
   )
 
-  // TODO(flupe): PROVE THIS
   val inv3_b = And(
     (leader ∈ act) ==> (Cardinality(Comprehension(List(p),
       log(p).lookUp(lastIndex(p))._1 ≡ log(leader).lookUp(lastIndex(leader))._1,
@@ -361,14 +373,14 @@ class MultiPraxosRoles extends FunSuite {
     )
 
     val fs_b = List(
-      axioms(send3, mbox3),
-      inv2,
+      // axioms(send3, mbox3),
+      And(inv2_maj, inv2_misc),
       round3,
       Not(prime(inv3_b))
     )
 
     assertUnsat(fs_a, debug=false, onlyAxioms=true, to=10000, reducer=c1e1)
-    // assertUnsat(fs_b, debug=false, onlyAxioms=false, to=60000, reducer=c2e1)
+    assertUnsat(fs_b, debug=false, onlyAxioms=false, to=60000, reducer=c2e1)
   }
 
   // }}}
