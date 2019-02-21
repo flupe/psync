@@ -160,7 +160,7 @@ class MultiPraxosRoles extends FunSuite {
    * - if node is active, it has the same command (on lastIndex(p)) as the leader, uncommitted
    * - for every process, the log prior to lastIndex is left unchanged
    */
-  val inv1 = And(
+  val inv1_a  = And(
     // leader active
     leader ∈ act,
 
@@ -171,11 +171,15 @@ class MultiPraxosRoles extends FunSuite {
     ForAll(List(p),
       (p ∈ act) ==> (log(p).lookUp(lastIndex(p))._1 ≡ log(leader).lookUp(lastIndex(leader))._1)
     ),
+  )
 
+  val inv1_b = And(
     // all processes have the same values in the log (before lastIndex(i))
     ForAll(List(p, i),
       ((IntLit(0) <= i) ∧ (i < lastIndex(leader))) ==> ((i ∈ KeySet(log(p))) ∧ (log(p).lookUp(i) ≡ log(leader).lookUp(i)))),
   )
+
+  val inv1 = And(inv1_a, inv1_b)
 
   test("inv0 ∧ round1 ⇒ inv1") {
     val fs = List(
@@ -256,7 +260,7 @@ class MultiPraxosRoles extends FunSuite {
     ),
 
     ForAll(List(p, i),
-      ((IntLit(0) <= i) ∧ (i < lastIndex(leader))) ==> (log(p).lookUp(i) ≡ log(leader).lookUp(i))),
+      ((IntLit(0) <= i) ∧ (i < lastIndex(p))) ==> ((i ∈ KeySet(log(p))) ∧ (log(p).lookUp(i) ≡ log(leader).lookUp(i)))),
   )
 
   val inv2 = And(inv2_maj, inv2_misc)
@@ -264,7 +268,7 @@ class MultiPraxosRoles extends FunSuite {
   test("inv1 ∧ round2 ⇒ inv2") {
     val fs_maj = List(
       axioms(send2, mbox2),
-      inv1,
+      inv1_a,
       round2,
       Not(prime(inv2_maj))
     )
@@ -294,69 +298,77 @@ class MultiPraxosRoles extends FunSuite {
     ForAll(List(p), (p ≠ leader) ==> (Size(send3(p)) ≡ 0)),
 
     // if leader active, leader sends msg to everyone
-    (leader ∈ act) ==> ForAll(List(p), send3(leader).lookUp(p) ≡ IntLit(1)),
+    (leader ∈ act) ==> ForAll(List(p), (p ∈ KeySet(send3(leader)) ∧ (send3(leader).lookUp(p) ≡ IntLit(1)))),
 
     // UPDATE ========================================================================
 
     // if leader active, leader stays active
-    (leader ∈ act) ==> (leader ∈ act1),
+    (leader ∈ act1) ≡ (leader ∈ act),
+
     // leader keeps same log
     log1(leader) ≡ log(leader),
-    // leader keeps same lastIndex
-    lastIndex1(leader) ≡ lastIndex(leader),
 
-    // inactive processes remain inactive
-    // and keep same values
-    ForAll(List(p), (p ∉ act) ==> And(
-      p ∉ act1,
-      log1(p) ≡ log(p),
-      lastIndex1(p) ≡ lastIndex(p),
-    )),
+    // all nodes keep the same lastIndex
+    ForAll(List(p), lastIndex1(p) ≡ lastIndex(p)),
 
     // if active process receives msg from leader:
     // - commit last cmd
     // - stay active
-    // - keep same index
     ForAll(List (p),
-      ((p ≠ leader) ∧ (p ∈ act) ∧ Not(Size(mbox3(p)) ≡ 0)) ==> And(
+      ((p ∈ act) ∧ (Size(mbox3(p)) > 0)) ==> And(
         log1(p) ≡ log(p).updated(lastIndex(p), Tuple(log(p).lookUp(lastIndex(p))._1, True())),
         p ∈ act1,
-        lastIndex1(p) ≡ lastIndex(p),
     )),
 
     // otherwise, becomes inactive, and conserves values
-    ForAll(List (p),
-      ((p ≠ leader) ∧ (p ∈ act) ∧ (Size(mbox3(p)) ≡ 0)) ==> And(
-        log1(p) ≡ log(p),
-        lastIndex1(p) ≡ lastIndex(p),
-        p ∉ act1,
-    )),
+    ForAll(List (p), (p ∉ act) ==> ((p ∉ act1) ∧ (log1(p) ≡ log(p)))),
+    ForAll(List (p), ((p ∈ act) ∧ (Size(mbox3(p)) ≡ 0)) ==> ((p ∉ act1) ∧ (log1(p) ≡ log(p)))),
   )
 
   /* Invariant Post-Round3
+   * - every process still active agree on last command AND has committed last command
+   * - the other part of the log is identical and every process agree
+   * - if leader is still active, then a majority of processes have same command under lastIndex(p)
+   *   (but not necessarily committed)
    */
-  val inv3 = And(
-    // every active process has committed the command
-    (leader ∈ act) ==> ForAll(List(p), (p ∈ act) ==> And(
+  val inv3_a = And(
+    ForAll(List(p), (p ∈ act) ==> And(
         log(p).lookUp(lastIndex(p))._1 ≡ log(leader).lookUp(lastIndex(leader))._1,
         log(p).lookUp(lastIndex(p))._2 ≡ True()
     )),
 
-    ForAll(List(p), lastIndex(p) ≡ lastIndex(leader))
+    ForAll(List(p), lastIndex(p) ≡ lastIndex(leader)),
+
+    ForAll(List(p, i),
+      ((IntLit(0) <= i) ∧ (i < lastIndex(p))) ==> ((i ∈ KeySet(log(p))) ∧ (log(p).lookUp(i) ≡ log(leader).lookUp(i)))),
   )
 
-  ignore("inv2 ∧ round3 ⇒ inv3") {
-    val fs = List(
+  // TODO(flupe): PROVE THIS
+  val inv3_b = And(
+    (leader ∈ act) ==> (Cardinality(Comprehension(List(p),
+      log(p).lookUp(lastIndex(p))._1 ≡ log(leader).lookUp(lastIndex(leader))._1,
+    )) > n / 2),
+  )
+
+  val inv3 = And(inv3_a, inv3_b)
+
+  test("inv2 ∧ round3 ⇒ inv3") {
+    val fs_a = List(
+      // axioms(send3, mbox3),
+      inv2,
+      round3,
+      Not(prime(inv3_a))
+    )
+
+    val fs_b = List(
       axioms(send3, mbox3),
       inv2,
       round3,
-      Not(prime(inv3))
+      Not(prime(inv3_b))
     )
 
-    val reducer = c1e1
-    assertUnsat(fs, debug=false, to=60000, reducer=reducer)
-    // val f0 = reduce(c2e1, fs, true, true)
-    // getModel(fs, to=60000, reducer=reducer)
+    assertUnsat(fs_a, debug=false, onlyAxioms=true, to=10000, reducer=c1e1)
+    // assertUnsat(fs_b, debug=false, onlyAxioms=false, to=60000, reducer=c2e1)
   }
 
   // }}}
