@@ -193,7 +193,7 @@ class MultiPraxosRoles extends FunSuite {
       Not(prime(inv1))
     )
 
-    assertUnsat(fs, debug=false, to=60000, onlyAxioms=true, reducer=c1e1)
+    assertUnsat(fs, onlyAxioms=true)
   }
 
   // }}}
@@ -275,6 +275,12 @@ class MultiPraxosRoles extends FunSuite {
   val inv2 = And(inv2_maj, inv2_misc, inv2_c)
 
   test("inv1 ∧ round2 ⇒ inv2") {
+    val fs_misc = List(
+      inv1,
+      round2,
+      Not(prime(And(inv2_misc, inv2_c)))
+    )
+
     val fs_maj = List(
       axioms(send2, mbox2),
       inv1_a,
@@ -282,14 +288,8 @@ class MultiPraxosRoles extends FunSuite {
       Not(prime(inv2_maj))
     )
 
-    val fs_misc = List(
-      inv1,
-      round2,
-      Not(prime(And(inv2_misc, inv2_c)))
-    )
-
-    // assertUnsat(fs_misc, debug=false, onlyAxioms=true, to=10000, reducer=c1e1)
-    assertUnsat(fs_maj, debug=false, onlyAxioms=false, to=60000, reducer=c2e1)
+    assertUnsat(fs_misc, onlyAxioms=true, to=10000, reducer=c1e1)
+    assertUnsat(fs_maj, onlyAxioms=false, to=60000, reducer=c2e1)
   }
 
   // }}}
@@ -366,21 +366,19 @@ class MultiPraxosRoles extends FunSuite {
 
   test("inv2 ∧ round3 ⇒ inv3") {
     val fs_a = List(
-      // axioms(send3, mbox3),
       inv2,
       round3,
       Not(prime(inv3_a))
     )
 
     val fs_b = List(
-      // axioms(send3, mbox3),
       And(inv2_maj, inv2_misc),
       round3,
       Not(prime(inv3_b))
     )
 
-    assertUnsat(fs_a, debug=false, onlyAxioms=true, to=10000, reducer=c1e1)
-    assertUnsat(fs_b, debug=false, onlyAxioms=false, to=60000, reducer=c2e1)
+    assertUnsat(fs_a, onlyAxioms=true)
+    assertUnsat(fs_b, onlyAxioms=true)
   }
 
   // }}}
