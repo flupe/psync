@@ -4,6 +4,8 @@ version := "0.3-SNAPSHOT"
 
 scalaVersion := "2.12.8"
 
+cancelable in Global := true
+
 scalacOptions in Compile ++= Seq(
     "-unchecked",
     "-deprecation",
