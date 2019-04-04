@@ -15,6 +15,8 @@ class Zab extends FunSuite {
   val pi = Variable("pi").setType(FSet(pid))
   val leader = Variable("leader").setType(FMap(pid, pid))
   val leader1 = Variable("leader").setType(FMap(pid, pid))
+  var act  = Variable("act").setType(FSet(pid))
+  var act1 = Variable("act1").setType(FSet(pid))
 
   // log-related types & uninterpreted functions
   val cmdType  = UnInterpreted("command")
@@ -25,24 +27,23 @@ class Zab extends FunSuite {
   val log  = UnInterpretedFct("log", Some(pid ~> logType))
   val log1 = UnInterpretedFct("log1", Some(pid ~> logType))
 
-  val lI = UnInterpretedFct("lastIndex", Some(pid ~> keyType))
-  val lI1 = UnInterpretedFct("lastIndex1", Some(pid ~> keyType))
+  def lI (p : Formula) : Formula = Size(log(p))
 
   val max_log = UnInterpretedFct("max_log", Some(FMap(pid, logType) ~> logType))
   // val send = UnInterpretedFct("send", Some(pid ~> FMap(pid, logType)))
   // val mbox = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, logType)))
 
   // quantified variables
-  val S = Variable("S").setType(FMap(pid, logType))
-  val k = Variable("k").setType(keyType)
-  val i = Variable("i").setType(keyType)
-  val j = Variable("j").setType(keyType)
+  val S   = Variable("S").setType(FMap(pid, logType))
+  val k   = Variable("k").setType(keyType)
+  val i   = Variable("i").setType(keyType)
+  val j   = Variable("j").setType(keyType)
+  val cmd = Variable("cmd").setType(cmdType)
 
 
   def prime(f: Formula) : Formula = {
     val symMap = Map[Symbol, Symbol](
       log       -> log1,
-      lI        -> lI1
     )
 
     val varMap = Map[Variable, Variable](
@@ -84,7 +85,6 @@ class Zab extends FunSuite {
   // LOG AXIOMS
 
   val logAxioms = And(
-    ForAll(List(p), lI(p) ≡ Size(log(p))),
     ForAll(List(p, i), ((IntLit(1) <= i) ∧ (i <= lI(p)) ==> log(p).isDefinedAt(i)))
   )
 
@@ -206,8 +206,133 @@ class Zab extends FunSuite {
   }
 
   // }}}
+  // Round 3: New Leader {{{
 
-  test("round 1 preserves agreement") {
+  val send3 = UnInterpretedFct("send", Some(pid ~> FMap(pid, logType)))
+  val mbox3 = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, logType)))
+
+  val newLeader = {
+    // TODO: take care of inactive leader (without quorum)
+    val sendCond = p ≡ coord
+
+    var sendPhase = ForAll(List(p), And(
+      // leader sends its log to everyone
+      sendCond ==> ForAll(List(q), And(
+        send2(p).isDefinedAt(q),
+        send2(p).lookUp(q) ≡ log(p),
+      )),
+
+      // others send nothing
+      Not(sendCond) ==> (Size(send2(p)) ≡ 0)
+    ))
+
+    val updateCond = (p ≠ coord) ∧ (mbox3(p).isDefinedAt(leader.lookUp(p)))
+
+    val updatePhase = ForAll(List(p), And(
+      // coord with quorum computes max log
+      updateCond ==> And(
+        log1(p) ≡ mbox3(p).lookUp(leader.lookUp(p)),
+      ),
+
+      // others do nothing
+      Not(updateCond) ==> And(
+        log1(p) ≡ log(p),
+      )
+    ))
+
+    And(sendPhase, updatePhase)
+  }
+
+  // }}}
+  
+  // BROADCAST
+
+  // Round 1 {{{
+
+  val send4 = UnInterpretedFct("send", Some(pid ~> FMap(pid, cmdType)))
+  val mbox4 = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, cmdType)))
+
+  val round1 = {
+    val sendPhase = ForAll(List(p), And(
+      (p ≡ coord) ==> ForAll(List(q), And(
+        send4(p).isDefinedAt(q),
+        send4(p).lookUp(q) ≡ cmd
+      )),
+      (p ≠ coord) ==> (Size(send4(p)) ≡ 0) 
+    ))
+
+    val updatePhase = ForAll(List(p), And(
+      (p ≡ coord) ∧ (p ∈ act) ==> And(
+        p ∈ act1,
+        log1(p) ≡ log(p).updated(lI(p) + IntLit(1), Tuple(cmd, False()))
+      ),
+
+      (p ≠ coord) ∧ (p ∈ act) ∧ (mbox4(p).isDefinedAt(coord)) ==> And(
+        p ∈ act1,
+        log1(p) ≡ log(p).updated(lI(p) + IntLit(1), Tuple(mbox4(p).lookUp(coord), False()))
+      ),
+
+      (p ∉ act) ∨ Not(mbox4(p).isDefinedAt(coord)) ==> And(
+        p ∉ act1,
+        log1(p) ≡ log(p)
+      )
+    ))
+
+    And(sendPhase, updatePhase)
+  }
+
+  // }}}
+  // Round 2 {{{
+
+  // TODO: add invariant that every committed value in log must have a majority around it
+  //       therefore we prove that the leader's log is the longest
+  val send5 = UnInterpretedFct("send", Some(pid ~> FMap(pid, Int)))
+  val mbox5 = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, Int)))
+
+  val round2 = {
+
+    val sendPhase = ForAll(List(p), And(
+      (p ≠ coord) ∧ (p ∈ act) ==> And(
+        send5(p).isDefinedAt(coord),
+        send5(p).lookUp(coord) ≡ IntLit(0)
+      ),
+
+      (p ≡ coord) ∨ (p ∉ act) ==> And(
+        Size(send5(p)) ≡ 0
+      )
+    ))
+
+    val updatePhase = ForAll(List(p), And(
+      (p ≡ coord) ∧ (p ∈ act) ∧ (Size(mbox5(coord)) >= (n / 2)) ==> And(
+        p ∈ act1,
+        log1(p) ≡ log(p).updated(lI(p), Tuple(
+          log(p).lookUp(lI(p))._1,
+          True()
+        ))
+      ),
+
+      (p ≡ coord) ∧ (p ∈ act) ∧ (Size(mbox5(coord)) < (n / 2)) ==> And(
+        p ∉ act1,
+        log1(p) ≡ log(p)
+      ),
+
+      (p ≠ coord) ∧ (p ∈ act) ==> And(
+        p ∈ act1,
+        log1(p) ≡ log(p)
+      ),
+
+      (p ∉ act) ==> And(
+        p ∉ act1,
+        log1(p) ≡ log(p)
+      )
+    ))
+
+    And(sendPhase, updatePhase)
+  }
+
+  // }}}
+
+  ignore("round 1 preserves agreement") {
     assertUnsat(List(
       agreement,
       newBallot,
@@ -215,7 +340,7 @@ class Zab extends FunSuite {
     ), onlyAxioms = true)
   }
 
-  test("round 2 preserves agreement") {
+  ignore("round 2 preserves agreement") {
     assertUnsat(List(
       axioms(send2, mbox2),
       maxLogAxioms,
@@ -223,5 +348,33 @@ class Zab extends FunSuite {
       ackBallot,
       Not(prime(agreement))
     ), onlyAxioms = true)
+  }
+
+  ignore("round 3 preserves agreement") {
+    assertUnsat(List(
+      axioms(send3, mbox3),
+      agreement,
+      newLeader,
+      Not(prime(agreement))
+    ), onlyAxioms = true)
+  }
+
+  ignore("BCAST round 1 preserves agreement") {
+    assertUnsat(List(
+      axioms(send4, mbox4),
+      logAxioms,
+      agreement,
+      round1,
+      Not(prime(agreement))
+    ), onlyAxioms = true)
+  }
+
+  test("BCAST round 2 preserves agreement") {
+    assertUnsat(List(
+      axioms(send5, mbox5),
+      agreement,
+      round2,
+      Not(prime(agreement))
+    ), to=50000, onlyAxioms = true)
   }
 }
