@@ -111,6 +111,19 @@ class Zab extends FunSuite {
   )
 
   // }}}
+  // Invariants {{{
+
+  // nodes agree on committed values
+  val agreement = ForAll(List(p, q, k), Or(
+    Not(log(p).isDefinedAt(k)),
+    Not(log(q).isDefinedAt(k)),
+    Not(log(p).lookUp(k)._2),
+    Not(log(q).lookUp(k)._2),
+    log(p).lookUp(k)._1 ≡ log(q).lookUp(k)._1
+  ))
+
+  // }}}
+  // Round 1: New Ballot {{{
 
   val send1 = UnInterpretedFct("send", Some(pid ~> FMap(pid, pid)))
   val mbox1 = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, pid)))
@@ -154,6 +167,9 @@ class Zab extends FunSuite {
     And(sendPhase, updatePhase)
   }
 
+  // }}}
+  // Round 2: Acknowledge Ballot {{{
+
   val send2 = UnInterpretedFct("send", Some(pid ~> FMap(pid, logType)))
   val mbox2 = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, logType)))
 
@@ -165,22 +181,47 @@ class Zab extends FunSuite {
       sendCond ==> And(
         send2(p).isDefinedAt(leader.lookUp(p)),
         send2(p).lookUp(leader.lookUp(p)) ≡ log(p),
+        ForAll(List(q), (q ≠ leader.lookUp(p)) ==> Not(send2(p).isDefinedAt(q))),
       ),
 
       // others send nothing
       Not(sendCond) ==> (Size(send2(p)) ≡ 0)
     ))
 
+    val updateCond = ((p ≡ coord))
+
     val updatePhase = ForAll(List(p), And(
       // coord with quorum computes max log
-      ((p ≡ coord) ∧ (Size(mbox2(p)) > n / 2)) ==> And(
+      updateCond ==> And(
         log1(p) ≡ max_log(mbox2(p)),
-        leader1.lookUp(p) ≡ leader.lookUp(p)
       ),
 
+      // others do nothing
+      Not(updateCond) ==> And(
+        log1(p) ≡ log(p),
+      )
     ))
 
     And(sendPhase, updatePhase)
   }
 
+  // }}}
+
+  test("round 1 preserves agreement") {
+    assertUnsat(List(
+      agreement,
+      newBallot,
+      Not(prime(agreement))
+    ), onlyAxioms = true)
+  }
+
+  test("round 2 preserves agreement") {
+    assertUnsat(List(
+      axioms(send2, mbox2),
+      maxLogAxioms,
+      agreement,
+      ackBallot,
+      Not(prime(agreement))
+    ), onlyAxioms = true)
+  }
 }
