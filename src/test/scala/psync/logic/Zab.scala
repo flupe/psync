@@ -8,6 +8,8 @@ import org.scalatest._
 
 class Zab extends FunSuite {
 
+  // DEFINITIONS
+
   // Housekeeping {{{
   val p  = Variable("p").setType(pid)
   val q  = Variable("q").setType(pid)
@@ -28,6 +30,7 @@ class Zab extends FunSuite {
   val log1 = UnInterpretedFct("log1", Some(pid ~> logType))
 
   def lI (p : Formula) : Formula = Size(log(p))
+  def lI1 (p : Formula) : Formula = Size(log1(p))
 
   val max_log = UnInterpretedFct("max_log", Some(FMap(pid, logType) ~> logType))
   // val send = UnInterpretedFct("send", Some(pid ~> FMap(pid, logType)))
@@ -114,12 +117,27 @@ class Zab extends FunSuite {
   // Invariants {{{
 
   // nodes agree on committed values
-  val agreement = ForAll(List(p, q, k), Or(
-    Not(log(p).isDefinedAt(k)),
-    Not(log(q).isDefinedAt(k)),
-    Not(log(p).lookUp(k)._2),
-    Not(log(q).lookUp(k)._2),
-    log(p).lookUp(k)._1 ≡ log(q).lookUp(k)._1
+  val agreement = And(
+    ForAll(List(p, q, k), Or(
+      Not(log(p).isDefinedAt(k)),
+      Not(log(q).isDefinedAt(k)),
+      Not(log(p).lookUp(k)._2),
+      Not(log(q).lookUp(k)._2),
+      log(p).lookUp(k)._1 ≡ log(q).lookUp(k)._1
+    )),
+
+    // Every committed value in some log is shared by a majority
+    // ForAll(List(p, k), (log(p).isDefinedAt(k) ∧ log(p).lookUp(k)._2) ==> 
+    //     (Comprehension(List(q),
+    //       (log(q).isDefinedAt(k) ∧ (log(q).lookUp(k)._1 ≡ log(p).lookUp(k)._1))
+    //     ).card > n / 2))
+  )
+
+  // committed values never change
+  val irrevocability = ForAll(List(p, k), (log(p).isDefinedAt(k) ∧ log(p).lookUp(k)._2) ==> And(
+    log1(p).isDefinedAt(k),
+    log1(p).lookUp(k)._2,
+    log1(p).lookUp(k)._1 ≡ log(p).lookUp(k)._1,
   ))
 
   // }}}
@@ -244,8 +262,7 @@ class Zab extends FunSuite {
   }
 
   // }}}
-  
-  // BROADCAST
+  // BROADCAST {{{
 
   // Round 1 {{{
 
@@ -292,18 +309,18 @@ class Zab extends FunSuite {
   val round2 = {
 
     val sendPhase = ForAll(List(p), And(
-      (p ≠ coord) ∧ (p ∈ act) ==> And(
+      (p ∈ act) ==> And(
         send5(p).isDefinedAt(coord),
         send5(p).lookUp(coord) ≡ IntLit(0)
       ),
 
-      (p ≡ coord) ∨ (p ∉ act) ==> And(
+      (p ∉ act) ==> And(
         Size(send5(p)) ≡ 0
       )
     ))
 
     val updatePhase = ForAll(List(p), And(
-      (p ≡ coord) ∧ (p ∈ act) ∧ (Size(mbox5(coord)) >= (n / 2)) ==> And(
+      (p ≡ coord) ∧ (p ∈ act) ∧ (Size(mbox5(coord)) > (n / 2)) ==> And(
         p ∈ act1,
         log1(p) ≡ log(p).updated(lI(p), Tuple(
           log(p).lookUp(lI(p))._1,
@@ -311,7 +328,7 @@ class Zab extends FunSuite {
         ))
       ),
 
-      (p ≡ coord) ∧ (p ∈ act) ∧ (Size(mbox5(coord)) < (n / 2)) ==> And(
+      (p ≡ coord) ∧ (p ∈ act) ∧ (Size(mbox5(coord)) <= (n / 2)) ==> And(
         p ∉ act1,
         log1(p) ≡ log(p)
       ),
@@ -332,11 +349,17 @@ class Zab extends FunSuite {
 
   // }}}
 
-  ignore("round 1 preserves agreement") {
+  // }}}
+
+  // TESTS
+
+  // Outer algorithm agreement {{{
+  test("round 1 preserves agreement & irrevocability") {
     assertUnsat(List(
       agreement,
+      logAxioms,
       newBallot,
-      Not(prime(agreement))
+      Not(And(prime(agreement), irrevocability))
     ), onlyAxioms = true)
   }
 
@@ -346,8 +369,8 @@ class Zab extends FunSuite {
       maxLogAxioms,
       agreement,
       ackBallot,
-      Not(prime(agreement))
-    ), onlyAxioms = true)
+      Not(And(prime(agreement)))
+    ), to=120000, onlyAxioms = true)
   }
 
   ignore("round 3 preserves agreement") {
@@ -358,23 +381,32 @@ class Zab extends FunSuite {
       Not(prime(agreement))
     ), onlyAxioms = true)
   }
-
+  // }}}
+  // Broadcast algorithm agreement {{{
   ignore("BCAST round 1 preserves agreement") {
     assertUnsat(List(
       axioms(send4, mbox4),
-      logAxioms,
       agreement,
+      ForAll(List(p), (p ∈ act) ==> (log(p) ≡ log(coord))),
+      logAxioms,
       round1,
-      Not(prime(agreement))
+      Not(And(
+        prime(agreement),
+        ForAll(List(p, q), ((p ∈ act1) ∧ (q ∈ act1)) ==>
+            log1(p).lookUp(lI1(p))._1 ≡ log1(q).lookUp(lI1(q))._1)
+      ))
     ), onlyAxioms = true)
   }
 
-  test("BCAST round 2 preserves agreement") {
+  ignore("BCAST round 2 preserves agreement") {
     assertUnsat(List(
       axioms(send5, mbox5),
       agreement,
+      logAxioms,
+      ForAll(List(p, q), ((q ∈ act) ∧ (p ∈ act)) ==> ((lI(p) ≡ lI(q)) ∧ (log(p).lookUp(lI(p))._1 ≡ log(q).lookUp(lI(q))._1))),
       round2,
       Not(prime(agreement))
-    ), to=50000, onlyAxioms = true)
+    ), to=60000, onlyAxioms = true)
   }
+  // }}}
 }
