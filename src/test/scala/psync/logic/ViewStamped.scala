@@ -6,28 +6,32 @@ import TestCommon._
 
 import org.scalatest._
 
-class Zab extends FunSuite {
+class ViewStamped extends FunSuite {
 
   // DEFINITIONS
 
   // Housekeeping {{{
-  val p  = Variable("p").setType(pid)
-  val q  = Variable("q").setType(pid)
-  val coord = Variable("coord").setType(pid)
-  val pi = Variable("pi").setType(FSet(pid))
-  val leader = Variable("leader").setType(FMap(pid, pid))
-  val leader1 = Variable("leader").setType(FMap(pid, pid))
-  var act  = Variable("act").setType(FSet(pid))
-  var act1 = Variable("act1").setType(FSet(pid))
 
   // log-related types & uninterpreted functions
-  val cmdType  = UnInterpreted("command")
-  val logEntry = Product(cmdType, Bool)
+  val cmdType   = UnInterpreted("command")
+  val epochType = Int
+  val logEntry = Product(cmdType, Bool, epochType)
   val keyType  = Int
   val logType  = FMap(keyType, logEntry)
 
+  val p  = Variable("p").setType(pid)
+  val q  = Variable("q").setType(pid)
+  val coord = Variable("coord").setType(pid)
+  val epoch = Variable("epoch").setType(epochType)
+  val pi = Variable("pi").setType(FSet(pid))
+
+  var act  = Variable("act").setType(FSet(pid))
+  var act1 = Variable("act1").setType(FSet(pid))
+  var act2 = Variable("act2").setType(FSet(pid))
+
   val log  = UnInterpretedFct("log", Some(pid ~> logType))
   val log1 = UnInterpretedFct("log1", Some(pid ~> logType))
+  val log2 = UnInterpretedFct("log2", Some(pid ~> logType))
 
   def lI (p : Formula) : Formula = Size(log(p))
   def lI1 (p : Formula) : Formula = Size(log1(p))
@@ -41,16 +45,20 @@ class Zab extends FunSuite {
   val k   = Variable("k").setType(keyType)
   val i   = Variable("i").setType(keyType)
   val j   = Variable("j").setType(keyType)
-  val cmd = Variable("cmd").setType(cmdType)
 
+  // leader local variables
+  val cmd = Variable("cmd").setType(cmdType)
+  val has_cmd = Variable("has_cmd").setType(Bool)
 
   def prime(f: Formula) : Formula = {
     val symMap = Map[Symbol, Symbol](
       log       -> log1,
+      log1      -> log2,
     )
 
     val varMap = Map[Variable, Variable](
-      leader    -> leader1,
+      act       -> act1,
+      act1      -> act2,
     )
 
     val f1 = FormulaUtils.mapSymbol(x => symMap.getOrElse(x, x), f)
@@ -69,7 +77,6 @@ class Zab extends FunSuite {
     ForAll(List(p), KeySet(mbox(p)) ⊆ pi),
     ForAll(List(p), KeySet(send(p)) ⊆ pi),
     ForAll(List(p), ho(p) ⊆ pi),
-
 
     ForAll(List(p), KeySet(mbox(p)).card <= n),
     ForAll(List(p), KeySet(mbox(p)).card >= 0),
@@ -116,6 +123,30 @@ class Zab extends FunSuite {
   // }}}
   // Invariants {{{
 
+  val initialInv = And(
+    // empty logs for everyone
+    ForAll(List(p), log(p).size ≡ IntLit(0))
+  )
+
+  val logInv = And(
+    // there cannot be two different committed commands at the same position in the logs
+    ForAll(List(p, q, k), And(
+      log(p).isDefinedAt(k),
+      log(q).isDefinedAt(k),
+      log(p).lookUp(k)._2,
+      log(q).lookUp(k)._2,
+    ) ==> (log(p).lookUp(k)._1 ≡ log(q).lookUp(k)._1)),
+
+    // if there is a committed command, then every different command under the same position has a lower epoch
+    ForAll(List(p, k), And(
+        log(p).isDefinedAt(k),
+        log(p).lookUp(k)._2,
+      ) ==> ForAll(List(q),
+        (log(q).isDefinedAt(k) ∧ (log(q).lookUp(k)._1 ≠ log(p).lookUp(k)._1))
+          ==> (log(q).lookUp(k)._3 < log(p).lookUp(k)._3)
+    ))
+  )
+
   // nodes agree on committed values
   val agreement = And(
     ForAll(List(p, q, k), Or(
@@ -127,10 +158,10 @@ class Zab extends FunSuite {
     )),
 
     // Every committed value in some log is shared by a majority
-    // ForAll(List(p, k), (log(p).isDefinedAt(k) ∧ log(p).lookUp(k)._2) ==> 
-    //     (Comprehension(List(q),
-    //       (log(q).isDefinedAt(k) ∧ (log(q).lookUp(k)._1 ≡ log(p).lookUp(k)._1))
-    //     ).card > n / 2))
+    ForAll(List(p, k), (log(p).isDefinedAt(k) ∧ log(p).lookUp(k)._2) ==> 
+        (Comprehension(List(q),
+          (log(q).isDefinedAt(k) ∧ (log(q).lookUp(k)._1 ≡ log(p).lookUp(k)._1))
+        ).card > n / 2))
   )
 
   // committed values never change
@@ -141,72 +172,20 @@ class Zab extends FunSuite {
   ))
 
   // }}}
-  // Round 1: New Ballot {{{
-
-  val send1 = UnInterpretedFct("send", Some(pid ~> FMap(pid, pid)))
-  val mbox1 = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, pid)))
-  
-  val newBallot = {
-    val sendCond = (p ≡ coord)
-
-    var sendPhase = ForAll(List(p), And(
-      // coord sends pid
-      sendCond ==> ForAll(List(q), And(
-        send1(p).isDefinedAt(q),
-        send1(p).lookUp(q) ≡ p,
-      )),
-
-      // others send nothing
-      Not(sendCond) ==> (Size(send1(p)) ≡ 0)
-    ))
-
-    val updatePhase = ForAll(List(p), And(
-      // coord does nothing
-      (p ≡ coord)  ==> And(
-        log1(p) ≡ log(p),
-        leader1.isDefinedAt(p),
-        leader1.lookUp(p) ≡ p
-      ),
-
-      // others pick leader
-      ((p ≠ coord) ∧ (Size(mbox1(p)) > 0))  ==> And(
-        log1(p) ≡ log(p),
-        leader1.isDefinedAt(p),
-        leader1.lookUp(p) ∈ KeySet(mbox1(p)) // we are cheating here
-      ),
-
-      // others do nothing
-      ((p ≠ coord) ∧ (Size(mbox1(p)) ≡ 0))  ==> And(
-        log1(p) ≡ log(p),
-        Not(leader1.isDefinedAt(p))
-      ),
-    ))
-
-    And(sendPhase, updatePhase)
-  }
-
-  // }}}
-  // Round 2: Acknowledge Ballot {{{
+  // Round 1: Acknowledge Ballot {{{
 
   val send2 = UnInterpretedFct("send", Some(pid ~> FMap(pid, logType)))
   val mbox2 = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, logType)))
 
   val ackBallot = {
-    val sendCond = leader.isDefinedAt(p)
-
     var sendPhase = ForAll(List(p), And(
-      // everyone sends log to their leader
-      sendCond ==> And(
-        send2(p).isDefinedAt(leader.lookUp(p)),
-        send2(p).lookUp(leader.lookUp(p)) ≡ log(p),
-        ForAll(List(q), (q ≠ leader.lookUp(p)) ==> Not(send2(p).isDefinedAt(q))),
-      ),
-
-      // others send nothing
-      Not(sendCond) ==> (Size(send2(p)) ≡ 0)
+      // everyone sends log to the coordinator
+      send2(p).isDefinedAt(coord),
+      send2(p).lookUp(coord) ≡ log(p),
+      ForAll(List(q), (q ≠ coord) ==> Not(send2(p).isDefinedAt(q))),
     ))
 
-    val updateCond = ((p ≡ coord))
+    val updateCond = (p ≡ coord)
 
     val updatePhase = ForAll(List(p), And(
       // coord with quorum computes max log
@@ -224,14 +203,14 @@ class Zab extends FunSuite {
   }
 
   // }}}
-  // Round 3: New Leader {{{
+  // Round 2: New Leader {{{
 
   val send3 = UnInterpretedFct("send", Some(pid ~> FMap(pid, logType)))
   val mbox3 = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, logType)))
 
   val newLeader = {
     // TODO: take care of inactive leader (without quorum)
-    val sendCond = p ≡ coord
+    val sendCond = (p ≡ coord)
 
     var sendPhase = ForAll(List(p), And(
       // leader sends its log to everyone
@@ -244,12 +223,12 @@ class Zab extends FunSuite {
       Not(sendCond) ==> (Size(send2(p)) ≡ 0)
     ))
 
-    val updateCond = (p ≠ coord) ∧ (mbox3(p).isDefinedAt(leader.lookUp(p)))
+    val updateCond = (p ≠ coord) ∧ (mbox3(p).isDefinedAt(coord))
 
     val updatePhase = ForAll(List(p), And(
       // coord with quorum computes max log
       updateCond ==> And(
-        log1(p) ≡ mbox3(p).lookUp(leader.lookUp(p)),
+        log1(p) ≡ mbox3(p).lookUp(coord),
       ),
 
       // others do nothing
@@ -348,32 +327,92 @@ class Zab extends FunSuite {
   }
 
   // }}}
+  // Round 3 {{{
+
+  val send6 = UnInterpretedFct("send", Some(pid ~> FMap(pid, Int)))
+  val mbox6 = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, Int)))
+
+  val round3 = {
+
+    val sendPhase = ForAll(List(p), And(
+      (p ∈ act) ==> And(
+        send5(p).isDefinedAt(coord),
+        send5(p).lookUp(coord) ≡ IntLit(0)
+      ),
+
+      (p ∉ act) ==> And(
+        Size(send5(p)) ≡ 0
+      )
+    ))
+
+    val updatePhase = ForAll(List(p), And(
+      (p ≡ coord) ∧ (p ∈ act) ∧ (Size(mbox5(coord)) > (n / 2)) ==> And(
+        // TODO: We get usr command
+      ),
+
+      (p ≡ coord) ∧ (p ∈ act) ∧ (Size(mbox5(coord)) <= (n / 2)) ==> And(
+        p ∉ act1,
+        log1(p) ≡ log(p)
+      ),
+
+      (p ≠ coord) ∧ (p ∈ act) ==> And(
+        p ∈ act1,
+        log1(p) ≡ log(p)
+      ),
+
+      (p ∉ act) ==> And(
+        p ∉ act1,
+        log1(p) ≡ log(p)
+      )
+    ))
+
+    And(sendPhase, updatePhase)
+  }
+
+  // }}}
 
   // }}}
 
   // TESTS
 
-  // Outer algorithm agreement {{{
-  test("round 1 preserves agreement & irrevocability") {
+  test("initial invariant implies agreement invariant") {
     assertUnsat(List(
-      agreement,
-      logAxioms,
-      newBallot,
-      Not(And(prime(agreement), irrevocability))
+      initialInv,
+      Not(agreement),
     ), onlyAxioms = true)
   }
 
-  ignore("round 2 preserves agreement") {
+  test("initial invariant implies log invariant") {
     assertUnsat(List(
+      initialInv,
+      Not(logInv),
+    ), onlyAxioms = true)
+  }
+
+  test("log invariant with agreement is preserved through round1") {
+    assertUnsat(List(
+      logInv,
       axioms(send2, mbox2),
       maxLogAxioms,
       agreement,
       ackBallot,
-      Not(And(prime(agreement)))
-    ), to=120000, onlyAxioms = true)
+      Not(prime(logInv))
+    ), onlyAxioms = true)
   }
 
-  ignore("round 3 preserves agreement") {
+  // Outer algorithm agreement {{{
+  ignore("round 1 preserves agreement") {
+    assertUnsat(List(
+      axioms(send2, mbox2),
+      logInv,
+      maxLogAxioms,
+      agreement,
+      ackBallot,
+      Not(And(prime(agreement)))
+    ), onlyAxioms = true)
+  }
+
+  ignore("round 2 preserves agreement") {
     assertUnsat(List(
       axioms(send3, mbox3),
       agreement,
@@ -381,6 +420,7 @@ class Zab extends FunSuite {
       Not(prime(agreement))
     ), onlyAxioms = true)
   }
+
   // }}}
   // Broadcast algorithm agreement {{{
   ignore("BCAST round 1 preserves agreement") {
