@@ -50,8 +50,10 @@ object InlineOps {
 
     def keySet = KeySet(lhs)
     def lookUp(rhs: Formula) = LookUp(lhs, rhs)
+    def at(rhs: Formula) = LookUp(lhs, rhs)
     def size = Size(lhs)
     def isDefinedAt(rhs: Formula) = IsDefinedAt(lhs, rhs)
+    def has(rhs: Formula) = IsDefinedAt(lhs, rhs)
     def updated(key: Formula, value: Formula) = Updated(lhs, key, value)
 
   }

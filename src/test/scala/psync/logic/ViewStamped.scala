@@ -95,7 +95,7 @@ class ViewStamped extends FunSuite {
   // LOG AXIOMS
 
   val logAxioms = And(
-    ForAll(List(p, i), ((IntLit(1) <= i) ∧ (i <= lI(p)) ==> log(p).isDefinedAt(i)))
+    ForAll(List(p, i), (((IntLit(1) <= i) ∧ (i <= lI(p))) ≡ log(p).isDefinedAt(i)))
   )
 
   // MAX_LOG AXIOMS
@@ -105,6 +105,7 @@ class ViewStamped extends FunSuite {
       val L = S.lookUp(p)
       val M = max_log(S)
 
+      // If the at some position in the input log, a value is committed, then it is kept in the max_log
       ForAll(List(k), Or(
         Not(L.isDefinedAt(k)),
         L.isDefinedAt(k) ∧ Not(L.lookUp(k)._2),
@@ -117,18 +118,31 @@ class ViewStamped extends FunSuite {
       S.isDefinedAt(p),
       S.lookUp(p).isDefinedAt(k),
       max_log(S).lookUp(k) ≡ S.lookUp(p).lookUp(k)
-    )))
+    ))),
+
+    ForAll(List(S, k), {
+      val M = max_log(S)
+
+      // If for some position in the logs, no command is committed, we take the max
+      ForAll(List(p), Or(Not(S.has(p)), Not(S.at(p).has(k)), Not(S.at(p).at(k)._2))) ==> (
+        ForAll(List(p), And(S.has(p), S.at(p).has(k)) ==> (S.at(p).at(k)._3 <= M.at(k)._3))
+      )
+    }),
   )
 
   // }}}
   // Invariants {{{
 
-  val initialInv = And(
+  val initialState = And(
     // empty logs for everyone
     ForAll(List(p), log(p).size ≡ IntLit(0))
   )
 
   val logInv = And(
+    ForAll(List(p, q, k), And(log(p).has(k), log(q).has(k), log(p).at(k)._3 ≡ log(q).at(k)._3) ==>
+      log(p).at(k)._1 ≡ log(q).at(k)._1
+    ),
+
     // there cannot be two different committed commands at the same position in the logs
     ForAll(List(p, q, k), And(
       log(p).isDefinedAt(k),
@@ -158,9 +172,9 @@ class ViewStamped extends FunSuite {
     )),
 
     // Every committed value in some log is shared by a majority
-    ForAll(List(p, k), (log(p).isDefinedAt(k) ∧ log(p).lookUp(k)._2) ==> 
+    ForAll(List(p, k), (log(p).has(k) ∧ log(p).at(k)._2) ==> 
         (Comprehension(List(q),
-          (log(q).isDefinedAt(k) ∧ (log(q).lookUp(k)._1 ≡ log(p).lookUp(k)._1))
+          (log(q).has(k) ∧ (log(q).at(k)._1 ≡ log(p).at(k)._1))
         ).card > n / 2))
   )
 
@@ -375,26 +389,19 @@ class ViewStamped extends FunSuite {
 
   // TESTS
 
-  test("initial invariant implies agreement invariant") {
-    assertUnsat(List(
-      initialInv,
-      Not(agreement),
-    ), onlyAxioms = true)
+  test("initial state implies Agreement invariant") {
+    assertUnsat(List(initialState, Not(agreement)), onlyAxioms = true)
   }
 
-  test("initial invariant implies log invariant") {
-    assertUnsat(List(
-      initialInv,
-      Not(logInv),
-    ), onlyAxioms = true)
+  test("initial state implies Log invariant") {
+    assertUnsat(List(initialState, Not(logInv)), onlyAxioms = true)
   }
 
-  test("log invariant with agreement is preserved through round1") {
+  test("Log invariant is preserved through round1") {
     assertUnsat(List(
       logInv,
       axioms(send2, mbox2),
       maxLogAxioms,
-      agreement,
       ackBallot,
       Not(prime(logInv))
     ), onlyAxioms = true)
@@ -403,21 +410,25 @@ class ViewStamped extends FunSuite {
   // Outer algorithm agreement {{{
   ignore("round 1 preserves agreement") {
     assertUnsat(List(
-      axioms(send2, mbox2),
       logInv,
+      axioms(send2, mbox2),
       maxLogAxioms,
       agreement,
       ackBallot,
-      Not(And(prime(agreement)))
-    ), onlyAxioms = true)
+      Not(prime(agreement))
+    ), to=60000, onlyAxioms = true)
   }
 
-  ignore("round 2 preserves agreement") {
+  // TODO: is this reasonnable?
+  // I fear reusing ho/send/mbox does not work as intended
+  test("round 2 preserves agreement") {
     assertUnsat(List(
+      axioms(send2, mbox2),
       axioms(send3, mbox3),
       agreement,
-      newLeader,
-      Not(prime(agreement))
+      ackBallot,
+      prime(newLeader),
+      Not(prime(prime(agreement)))
     ), onlyAxioms = true)
   }
 
