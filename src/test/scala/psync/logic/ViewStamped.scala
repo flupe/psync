@@ -32,13 +32,16 @@ class ViewStamped extends FunSuite {
   val log  = UnInterpretedFct("log", Some(pid ~> logType))
   val log1 = UnInterpretedFct("log1", Some(pid ~> logType))
   val log2 = UnInterpretedFct("log2", Some(pid ~> logType))
+  val input  = UnInterpretedFct("input", Some(Function(Nil, cmdType)))
 
   def lI (p : Formula) : Formula = Size(log(p))
   def lI1 (p : Formula) : Formula = Size(log1(p))
+  val lastCmd  = Variable("lastCmd").setType(FOption(cmdType))
+  val currentCmd  = Variable("currentCmd").setType(cmdType)
+
+  val ho1 = UnInterpretedFct("ho1",Some(CL.procType ~> FSet(CL.procType)))
 
   val max_log = UnInterpretedFct("max_log", Some(FMap(pid, logType) ~> logType))
-  // val send = UnInterpretedFct("send", Some(pid ~> FMap(pid, logType)))
-  // val mbox = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, logType)))
 
   // quantified variables
   val S   = Variable("S").setType(FMap(pid, logType))
@@ -54,6 +57,7 @@ class ViewStamped extends FunSuite {
     val symMap = Map[Symbol, Symbol](
       log       -> log1,
       log1      -> log2,
+      ho        -> ho1
     )
 
     val varMap = Map[Variable, Variable](
@@ -84,18 +88,13 @@ class ViewStamped extends FunSuite {
     ForAll(List(p), (ho(p)).card <= n),
     ForAll(List(p), (ho(p)).card >= 0),
 
+    ForAll(List(p), p ∈ ho(p)),
+
     ForAll(List(p, q), mbox(p).isDefinedAt(q) ≡ ((q ∈ ho(p)) ∧ send(q).isDefinedAt(p))),
     ForAll(List(p, q), ((q ∈ ho(p)) ∧ send(q).isDefinedAt(p)) ==> (mbox(p).lookUp(q) ≡ send(q).lookUp(p))),
     ForAll(List(p, q), (mbox(p).isDefinedAt(q)) ≡ ((q ∈ ho(p) ∧ send(q).isDefinedAt(p)))),
     ForAll(List(p), (Size(send(p)) ≡ 0) ==> (ForAll(List(q), Not(mbox(q).isDefinedAt(p))))),
     ForAll(List(p), (KeySet(mbox(p)) ⊆ ho(p))),
-  )
-
-
-  // LOG AXIOMS
-
-  val logAxioms = And(
-    ForAll(List(p, i), (((IntLit(1) <= i) ∧ (i <= lI(p))) ≡ log(p).isDefinedAt(i)))
   )
 
   // MAX_LOG AXIOMS
@@ -139,6 +138,13 @@ class ViewStamped extends FunSuite {
   )
 
   val logInv = And(
+    // logs are indexed from 1 to KeySize(log)
+    ForAll(List(p, i), And(IntLit(1) <= i, i <= lI(p)) ≡ log(p).has(i)),
+
+    // every entry except the previous one is committed
+    ForAll(List(p, i), And(IntLit(1) <= i, i < lI(p)) ==> log(p).at(i)._2),
+
+    // two commands originating from the same epoch at the same position have to be equal
     ForAll(List(p, q, k), And(log(p).has(k), log(q).has(k), log(p).at(k)._3 ≡ log(q).at(k)._3) ==>
       log(p).at(k)._1 ≡ log(q).at(k)._1
     ),
@@ -151,45 +157,46 @@ class ViewStamped extends FunSuite {
       log(q).lookUp(k)._2,
     ) ==> (log(p).lookUp(k)._1 ≡ log(q).lookUp(k)._1)),
 
-    // if there is a committed command, then every different command under the same position has a lower epoch
-    ForAll(List(p, k), And(
-        log(p).isDefinedAt(k),
-        log(p).lookUp(k)._2,
-      ) ==> ForAll(List(q),
-        (log(q).isDefinedAt(k) ∧ (log(q).lookUp(k)._1 ≠ log(p).lookUp(k)._1))
-          ==> (log(q).lookUp(k)._3 < log(p).lookUp(k)._3)
-    ))
+    // if there is a committed command, then every different command at the same position has a lower epoch
+    ForAll(List(p, k), And(log(p).has(k), log(p).at(k)._2)) ==> ForAll(List(q),
+      And(log(q).has(k), log(q).at(k)._1 ≠ log(p).at(k)._1) ==> (log(q).at(k)._3 < log(p).at(k)._3)
+    )
   )
+
+  // TODO(flupe): make this more precise
+  //  (log not equal throughout broadcast, only the prefix)
+  val broadcastInv = And(
+    ForAll(List(p, q), And(p ∈ act, q ∈ act) ==> (log(p) ≡ log(q)))
+  )
+
 
   // nodes agree on committed values
   val agreement = And(
     ForAll(List(p, q, k), Or(
-      Not(log(p).isDefinedAt(k)),
-      Not(log(q).isDefinedAt(k)),
-      Not(log(p).lookUp(k)._2),
-      Not(log(q).lookUp(k)._2),
-      log(p).lookUp(k)._1 ≡ log(q).lookUp(k)._1
+      Not(log(p).has(k)),
+      Not(log(q).has(k)),
+      Not(log(p).at(k)._2),
+      Not(log(q).at(k)._2),
+      log(p).at(k)._1 ≡ log(q).at(k)._1
     )),
 
-    // Every committed value in some log is shared by a majority
-    ForAll(List(p, k), (log(p).has(k) ∧ log(p).at(k)._2) ==> 
-        (Comprehension(List(q),
-          (log(q).has(k) ∧ (log(q).at(k)._1 ≡ log(p).at(k)._1))
-        ).card > n / 2))
+    // Every committed value in a log is shared by a majority
+    ForAll(List(p, k), And(log(p).has(k), log(p).at(k)._2) ==> 
+        (Comprehension(List(q), And(log(q).has(k), log(q).at(k)._1 ≡ log(p).at(k)._1)).card > n / 2))
   )
 
-  // committed values never change
-  val irrevocability = ForAll(List(p, k), (log(p).isDefinedAt(k) ∧ log(p).lookUp(k)._2) ==> And(
-    log1(p).isDefinedAt(k),
-    log1(p).lookUp(k)._2,
-    log1(p).lookUp(k)._1 ≡ log(p).lookUp(k)._1,
+  // committed commands always remain in the log
+  val irrevocability = ForAll(List(p, k), And(log(p).has(k), log(p).at(k)._2) ==> And(
+    log1(p).has(k),
+    log1(p).at(k)._2,
+    log1(p).at(k)._1 ≡ log(p).at(k)._1,
   ))
 
   // }}}
   // Round 1: Acknowledge Ballot {{{
 
-  val send2 = UnInterpretedFct("send", Some(pid ~> FMap(pid, logType)))
-  val mbox2 = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, logType)))
+  val send2 = UnInterpretedFct("send2", Some(pid ~> FMap(pid, logType)))
+  val mbox2 = UnInterpretedFct("mbox2", Some(pid ~> FMap(pid, logType)))
 
   val ackBallot = {
     var sendPhase = ForAll(List(p), And(
@@ -205,6 +212,8 @@ class ViewStamped extends FunSuite {
       // coord with quorum computes max log
       updateCond ==> And(
         log1(p) ≡ max_log(mbox2(p)),
+        IsEmpty(lastCmd) ==> (currentCmd ≡ input()),
+        IsDefined(lastCmd) ==> (currentCmd ≡ Get(lastCmd)),
       ),
 
       // others do nothing
@@ -219,8 +228,8 @@ class ViewStamped extends FunSuite {
   // }}}
   // Round 2: New Leader {{{
 
-  val send3 = UnInterpretedFct("send", Some(pid ~> FMap(pid, logType)))
-  val mbox3 = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, logType)))
+  val send3 = UnInterpretedFct("send3", Some(pid ~> FMap(pid, logType)))
+  val mbox3 = UnInterpretedFct("mbox3", Some(pid ~> FMap(pid, logType)))
 
   val newLeader = {
     // TODO: take care of inactive leader (without quorum)
@@ -259,30 +268,25 @@ class ViewStamped extends FunSuite {
 
   // Round 1 {{{
 
-  val send4 = UnInterpretedFct("send", Some(pid ~> FMap(pid, cmdType)))
-  val mbox4 = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, cmdType)))
+  val send4 = UnInterpretedFct("send4", Some(pid ~> FMap(pid, cmdType)))
+  val mbox4 = UnInterpretedFct("mbox4", Some(pid ~> FMap(pid, cmdType)))
 
   val round1 = {
     val sendPhase = ForAll(List(p), And(
-      (p ≡ coord) ==> ForAll(List(q), And(
+      And(p ≡ coord, p ∈ act) ==> ForAll(List(q), And(
         send4(p).isDefinedAt(q),
-        send4(p).lookUp(q) ≡ cmd
+        send4(p).lookUp(q) ≡ currentCmd
       )),
-      (p ≠ coord) ==> (Size(send4(p)) ≡ 0) 
+      Or(p ≠ coord, p ∉ act) ==> (Size(send4(p)) ≡ 0) 
     ))
 
     val updatePhase = ForAll(List(p), And(
-      (p ≡ coord) ∧ (p ∈ act) ==> And(
+      And(p ∈ act, mbox4(p).isDefinedAt(coord)) ==> And(
         p ∈ act1,
-        log1(p) ≡ log(p).updated(lI(p) + IntLit(1), Tuple(cmd, False()))
+        log1(p) ≡ log(p).updated(lI(coord) + IntLit(1), Tuple(mbox4(p).lookUp(coord), False(), epoch))
       ),
 
-      (p ≠ coord) ∧ (p ∈ act) ∧ (mbox4(p).isDefinedAt(coord)) ==> And(
-        p ∈ act1,
-        log1(p) ≡ log(p).updated(lI(p) + IntLit(1), Tuple(mbox4(p).lookUp(coord), False()))
-      ),
-
-      (p ∉ act) ∨ Not(mbox4(p).isDefinedAt(coord)) ==> And(
+      Or(p ∉ act, Not(mbox4(p).isDefinedAt(coord))) ==> And(
         p ∉ act1,
         log1(p) ≡ log(p)
       )
@@ -296,8 +300,8 @@ class ViewStamped extends FunSuite {
 
   // TODO: add invariant that every committed value in log must have a majority around it
   //       therefore we prove that the leader's log is the longest
-  val send5 = UnInterpretedFct("send", Some(pid ~> FMap(pid, Int)))
-  val mbox5 = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, Int)))
+  val send5 = UnInterpretedFct("send5", Some(pid ~> FMap(pid, Int)))
+  val mbox5 = UnInterpretedFct("mbox5", Some(pid ~> FMap(pid, Int)))
 
   val round2 = {
 
@@ -317,7 +321,8 @@ class ViewStamped extends FunSuite {
         p ∈ act1,
         log1(p) ≡ log(p).updated(lI(p), Tuple(
           log(p).lookUp(lI(p))._1,
-          True()
+          True(),
+          epoch
         ))
       ),
 
@@ -343,8 +348,8 @@ class ViewStamped extends FunSuite {
   // }}}
   // Round 3 {{{
 
-  val send6 = UnInterpretedFct("send", Some(pid ~> FMap(pid, Int)))
-  val mbox6 = UnInterpretedFct("mbox", Some(pid ~> FMap(pid, Int)))
+  val send6 = UnInterpretedFct("send6", Some(pid ~> FMap(pid, Int)))
+  val mbox6 = UnInterpretedFct("mbox6", Some(pid ~> FMap(pid, Int)))
 
   val round3 = {
 
@@ -361,7 +366,8 @@ class ViewStamped extends FunSuite {
 
     val updatePhase = ForAll(List(p), And(
       (p ≡ coord) ∧ (p ∈ act) ∧ (Size(mbox5(coord)) > (n / 2)) ==> And(
-        // TODO: We get usr command
+        currentCmd ≡ input(),
+        log1(p) ≡ log(p)
       ),
 
       (p ≡ coord) ∧ (p ∈ act) ∧ (Size(mbox5(coord)) <= (n / 2)) ==> And(
@@ -387,17 +393,17 @@ class ViewStamped extends FunSuite {
 
   // }}}
 
-  // TESTS
+  // TESTS {{{
 
-  test("initial state implies Agreement invariant") {
+  ignore("initial state implies Agreement invariant") {
     assertUnsat(List(initialState, Not(agreement)), onlyAxioms = true)
   }
 
-  test("initial state implies Log invariant") {
+  ignore("initial state implies Log invariant") {
     assertUnsat(List(initialState, Not(logInv)), onlyAxioms = true)
   }
 
-  test("Log invariant is preserved through round1") {
+  ignore("Log invariant is preserved through round1") {
     assertUnsat(List(
       logInv,
       axioms(send2, mbox2),
@@ -421,15 +427,19 @@ class ViewStamped extends FunSuite {
 
   // TODO: is this reasonnable?
   // I fear reusing ho/send/mbox does not work as intended
-  test("round 2 preserves agreement") {
-    assertUnsat(List(
-      axioms(send2, mbox2),
-      axioms(send3, mbox3),
+  ignore("round1 followed by round 2 preserves Agreement invariant") {
+    val fs = List(
       agreement,
+      maxLogAxioms,
+
+      axioms(send2, mbox2),
+      prime(axioms(send3, mbox3)),
       ackBallot,
       prime(newLeader),
       Not(prime(prime(agreement)))
-    ), onlyAxioms = true)
+    )
+    println(fs)
+    assertUnsat(fs, onlyAxioms = true)
   }
 
   // }}}
@@ -438,26 +448,61 @@ class ViewStamped extends FunSuite {
     assertUnsat(List(
       axioms(send4, mbox4),
       agreement,
+      logInv,
+      // TODO(flupe): move this to a broadcast invariant
       ForAll(List(p), (p ∈ act) ==> (log(p) ≡ log(coord))),
-      logAxioms,
+      // TODO(flupe): see why:
+      //  - the following is not needed
+      //  - it adds so much time
+      ForAll(List(p), (p ∉ act) ==> (log(p).size < log(coord).size)),
       round1,
-      Not(And(
-        prime(agreement),
-        ForAll(List(p, q), ((p ∈ act1) ∧ (q ∈ act1)) ==>
-            log1(p).lookUp(lI1(p))._1 ≡ log1(q).lookUp(lI1(q))._1)
-      ))
-    ), onlyAxioms = true)
+      Not(prime(agreement))
+    ), to=60000, onlyAxioms = true)
   }
 
   ignore("BCAST round 2 preserves agreement") {
     assertUnsat(List(
       axioms(send5, mbox5),
       agreement,
-      logAxioms,
       ForAll(List(p, q), ((q ∈ act) ∧ (p ∈ act)) ==> ((lI(p) ≡ lI(q)) ∧ (log(p).lookUp(lI(p))._1 ≡ log(q).lookUp(lI(q))._1))),
       round2,
       Not(prime(agreement))
     ), to=60000, onlyAxioms = true)
   }
+  // }}}
+  // Irrevocability {{{
+
+  test("BCAST round 1 respects irrevocability") {
+    assertUnsat(List(
+      axioms(send4, mbox4),
+      logInv,
+      broadcastInv,
+      round1,
+      Not(irrevocability)
+    ), to=60000, onlyAxioms = true)
+  }
+
+  test("BCAST round 2 respects irrevocability") {
+    assertUnsat(List(
+      axioms(send5, mbox5),
+      logInv,
+      broadcastInv,
+      round2,
+      Not(irrevocability)
+    ), to=60000, onlyAxioms = true)
+  }
+
+  test("BCAST round 3 respects irrevocability") {
+    assertUnsat(List(
+      axioms(send6, mbox6),
+      logInv,
+      broadcastInv,
+      round3,
+      Not(irrevocability)
+    ), to=60000, onlyAxioms = true)
+  }
+
+
+  // }}}
   // }}}
 }
