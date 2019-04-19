@@ -238,12 +238,12 @@ class ViewStamped extends FunSuite {
     var sendPhase = ForAll(List(p), And(
       // leader sends its log to everyone
       sendCond ==> ForAll(List(q), And(
-        send2(p).isDefinedAt(q),
-        send2(p).lookUp(q) ≡ log(p),
+        send3(p).isDefinedAt(q),
+        send3(p).lookUp(q) ≡ log(p),
       )),
 
       // others send nothing
-      Not(sendCond) ==> (Size(send2(p)) ≡ 0)
+      Not(sendCond) ==> (Size(send3(p)) ≡ 0)
     ))
 
     val updateCond = (p ≠ coord) ∧ (mbox3(p).isDefinedAt(coord))
@@ -395,18 +395,18 @@ class ViewStamped extends FunSuite {
 
   // TESTS {{{
 
-  ignore("initial state implies Agreement invariant") {
+  test("initial state implies Agreement invariant") {
     assertUnsat(List(initialState, Not(agreement)), onlyAxioms = true)
   }
 
-  ignore("initial state implies Log invariant") {
+  test("initial state implies Log invariant") {
     assertUnsat(List(initialState, Not(logInv)), onlyAxioms = true)
   }
 
   ignore("Log invariant is preserved through round1") {
     assertUnsat(List(
-      logInv,
       axioms(send2, mbox2),
+      logInv,
       maxLogAxioms,
       ackBallot,
       Not(prime(logInv))
@@ -471,7 +471,28 @@ class ViewStamped extends FunSuite {
   }
   // }}}
   // Irrevocability {{{
+  // Outer algorithm {{{
+  test("round 1 respects irrevocability") {
+    assertUnsat(List(
+      axioms(send2, mbox2),
+      maxLogAxioms,
+      ackBallot,
+      Not(irrevocability)
+    ), onlyAxioms = true)
+  }
 
+  test("round 2 respects irrevocability") {
+    assertUnsat(List(
+      axioms(send3, mbox3),
+      logInv,
+      // TODO: move this some place else
+      ForAll(List(p, k), And(log(p).has(k), log(p).at(k)._2) ==> And(log(coord).has(k), log(coord).at(k)._1 ≡ log(p).at(k)._1, log(coord).at(k)._2)),
+      newLeader,
+      Not(irrevocability)
+    ), onlyAxioms = true)
+  }
+  // }}}
+  // Broadcast {{{
   test("BCAST round 1 respects irrevocability") {
     assertUnsat(List(
       axioms(send4, mbox4),
@@ -495,14 +516,11 @@ class ViewStamped extends FunSuite {
   test("BCAST round 3 respects irrevocability") {
     assertUnsat(List(
       axioms(send6, mbox6),
-      logInv,
-      broadcastInv,
       round3,
       Not(irrevocability)
     ), to=60000, onlyAxioms = true)
   }
-
-
+  // }}}
   // }}}
   // }}}
 }
